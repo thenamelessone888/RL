@@ -97,10 +97,15 @@ class TD3Agent(TrainingAgent):
     bc_reg_anchor_decay_steps: int = 0
 
     def _effective_anchor_weight(self):
-        if self.bc_reg_anchor_decay_steps <= 0:
+        # Defensive: these are dataclass fields, but an agent restored from
+        # a pre-decay checkpoint (unpickled directly, bypassing __init__)
+        # won't have them set either -- see train()'s similar guard.
+        decay_steps = getattr(self, "bc_reg_anchor_decay_steps", 0)
+        if decay_steps <= 0:
             return 1.0
-        progress = min(1.0, self._total_it / self.bc_reg_anchor_decay_steps)
-        return 1.0 + progress * (self.bc_reg_anchor_min_weight - 1.0)
+        min_weight = getattr(self, "bc_reg_anchor_min_weight", 1.0)
+        progress = min(1.0, self._total_it / decay_steps)
+        return 1.0 + progress * (min_weight - 1.0)
 
     model_nograd = cached_property(
         lambda self: no_grad(copy_shared(self.model))
@@ -267,6 +272,22 @@ class TD3Agent(TrainingAgent):
 
     def train(self, batch):
         o, a, r, o2, d, _ = batch
+
+        # Defensive: an agent restored from a checkpoint saved under an
+        # older code version is unpickled directly (bypassing
+        # __post_init__ entirely, standard Python dataclass/pickle
+        # behavior), so any private state attribute added after that
+        # checkpoint was written simply won't exist on the restored
+        # object. Backfill defaults rather than crash on the first
+        # resumed train() call.
+        for _attr, _default in (
+            ("_last_loss_actor", float("nan")),
+            ("_last_actor_grad_norm", float("nan")),
+            ("_last_bc_reg_term", float("nan")),
+            ("_last_anchor_weight", float("nan")),
+        ):
+            if not hasattr(self, _attr):
+                setattr(self, _attr, _default)
 
         self._total_it += 1
 
