@@ -28,6 +28,5 @@ keyboard==0.13.5
 # Testing
 pytest==9.1.1
 
-# Not yet used by any script in this project (added when results/plots/ is populated,
-# see Section 23 of the research plan / docs/experiments.md).
-# matplotlib
+# Plotting (scripts/plot_results.py, Section 23)
+matplotlib==3.11.2
