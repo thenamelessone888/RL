@@ -2,10 +2,37 @@
 
 ## Deterministic policy gets stuck at a fixed point on `tmrl-test` (2026-09-19)
 
-**Status**: root-caused, not yet fixed. Affects the current
+**Status**: root-caused; a mitigation is implemented and live-verified, but
+its actual training effectiveness (does the policy learn to escape more
+reliably) has not yet been observed over a real run. Affects the current
 `TD3_CLEAN_HUMAN_WARMSTART` checkpoint (post Phase 6 extended baseline,
 `experiments/phase6_baseline_v3_extended/`). Full 6-episode trace:
 `experiments/known_issue_stuck_at_wall/trained_deterministic_trace.csv`.
+
+## Mitigation implemented (2026-09-19): stuck-recovery reward shaping
+
+`td3/stuck_recovery.py`'s `TM2020InterfaceLidarStuckRecovery` (option 1 from
+the candidates list below) subclasses `TM2020InterfaceLidar` to apply a
+`-0.1` reward penalty once the car has been "stuck" (`lidar_min <= 0.5` AND
+`speed <= 2.0`) for 5 consecutive steps -- half of TMRL's own
+`FAILURE_COUNTDOWN=10`, so the signal arrives well before the stall-timeout
+would otherwise end the episode with the stuck state contributing nothing
+but flat 0.0 reward. Wired into `TD3_INT` in `td3/config.py`, so every TD3
+config (plain, human-warmstart, curriculum) now includes it.
+
+Unit-tested offline (`tests/test_stuck_recovery.py`) and **live-verified**
+against the exact known-bad BC actor: replaying it against the real
+environment reproduced the same stuck failure, and this time
+`stuck_penalty_applied=True` / `reward=-0.1000` correctly appeared every
+step from the moment `consecutive_stuck_steps` reached 5, through episode
+termination at step 80.
+
+**What this does NOT yet prove**: that training with this shaped reward
+actually teaches the policy a better recovery behavior -- that requires
+watching a real training run's stuck-episode rate and/or return trend over
+time, which hasn't been done yet (the live check above was a single
+replayed episode against a frozen actor, not a training run). Treat this as
+"the mechanism works as designed," not "the underlying problem is solved."
 
 ### Symptom
 

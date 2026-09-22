@@ -60,6 +60,7 @@ from tmrl.util import partial
 
 from td3.agent import TD3Agent
 from td3.models import TD3ActorCritic
+from td3.stuck_recovery import TM2020InterfaceLidarStuckRecovery
 
 
 # ============================================================================
@@ -229,7 +230,11 @@ assert TD3_DATASET_PATH != cfg.DATASET_PATH, (
 # TRACKMANIA RTGYM INTERFACE
 # ============================================================================
 
-# Reuse TMRL's LIDAR interface, identically to DDPG.
+# Reuse TMRL's LIDAR interface, identically to DDPG -- except we subclass to
+# add stuck-recovery reward shaping (td3/stuck_recovery.py), a mitigation for
+# the wall-stuck failure mode documented in docs/known_issues.md. This
+# affects every TD3 config below (plain, human-warmstart, curriculum), since
+# they all build their env from TD3_ENV_CLS -> TD3_CONFIG_DICT -> TD3_INT.
 #
 # Observation history:
 #
@@ -238,7 +243,7 @@ assert TD3_DATASET_PATH != cfg.DATASET_PATH, (
 # and the existing RTGym action-history configuration is preserved.
 
 TD3_INT = partial(
-    TM2020InterfaceLidar,
+    TM2020InterfaceLidarStuckRecovery,
     img_hist_len=cfg.IMG_HIST_LEN,
     gamepad=cfg.PRAGMA_GAMEPAD,
 )
