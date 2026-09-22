@@ -104,12 +104,18 @@ def verify_artifacts(device=None):
 
 
 def run_deterministic_policy(policy, episodes=1, max_steps=200, trace_steps=100):
-    """Run BC, random, or the current trained policy directly against TrackMania
-    without RL machinery. 'trained' loads the trainer's live worker.tmod
-    (TD3_HUMAN_WARMSTART_MODEL_PATH_WORKER), i.e. whatever the most recent
-    training run last broadcast -- used to inspect the actor's *current*
-    behavior (e.g. comparing a short/failed episode against a long/successful
-    one), as opposed to 'bc' which is always the original frozen BC actor.
+    """Run BC, random, or the current curriculum-trained policy directly
+    against TrackMania without RL machinery. 'trained' loads the curriculum
+    trainer's live worker.tmod (TD3_CURRICULUM_MODEL_PATH_WORKER), i.e.
+    whatever the curriculum run most recently broadcast -- used to inspect
+    the actor's *current* behavior, as opposed to 'bc' which is always the
+    original frozen BC actor.
+
+    IMPORTANT: before curriculum/ existed, this pointed at
+    TD3_HUMAN_WARMSTART_MODEL_PATH_WORKER (the Phase 6 experiment). Now that
+    curriculum training is the active path, it points at
+    TD3_CURRICULUM_MODEL_PATH_WORKER instead -- the Phase 6 checkpoint is no
+    longer updated by anything and would silently evaluate a stale model.
     """
     if policy not in {"bc", "random", "trained"}:
         raise ValueError("policy must be 'bc', 'random', or 'trained'")
@@ -118,13 +124,13 @@ def run_deterministic_policy(policy, episodes=1, max_steps=200, trace_steps=100)
         model_path = TD3_HUMAN_WARMSTART_ACTOR_PATH
         folder = Path(TD3_CLEAN_HUMAN_EXPERIMENT_FOLDER)
     elif policy == "trained":
-        from td3.config import TD3_HUMAN_WARMSTART_MODEL_PATH_WORKER
-        model_path = TD3_HUMAN_WARMSTART_MODEL_PATH_WORKER
-        folder = Path(TD3_CLEAN_HUMAN_EXPERIMENT_FOLDER)
+        from td3.config import TD3_CURRICULUM_MODEL_PATH_WORKER, TD3_CURRICULUM_EXPERIMENT_FOLDER
+        model_path = TD3_CURRICULUM_MODEL_PATH_WORKER
+        folder = Path(TD3_CURRICULUM_EXPERIMENT_FOLDER)
         if not Path(model_path).exists():
             raise FileNotFoundError(
-                f"No trained worker checkpoint found: {model_path}. "
-                "Run the trainer/worker (--human-warmstart) first."
+                f"No trained curriculum worker checkpoint found: {model_path}. "
+                "Run curriculum-trainer/curriculum-worker first."
             )
     else:
         folder = Path(TD3_CLEAN_RANDOM_EXPERIMENT_FOLDER)
