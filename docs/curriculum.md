@@ -35,7 +35,7 @@ its OpenPlanet plugins):
    map file each stage expects, or run `python train_td3.py curriculum-status`).
 2. If the stage's reward trajectory hasn't been recorded yet:
    ```bash
-   python train_td3.py record-track-reward <stage_name>
+   python train_td3.py record-track-reward custom_1_first
    ```
    Press `e` in-game to start recording, drive the track, `q` or the finish
    line to stop and save. One-time per track.
@@ -73,12 +73,28 @@ python train_td3.py curriculum-status
 | # | name | map | status |
 |---|---|---|---|
 | 0 | `tmrl_test_baseline` | `tmrl-test.Map.Gbx` | ready (bootstrapped from the existing official baseline trajectory) |
-| 1 | `tmrl_train_harder` | `tmrl-train.Map.Gbx` | needs its reward trajectory recorded |
+| 1 | `custom_1_first` | `first.Map.Gbx` | needs its reward trajectory recorded |
+| 2 | `custom_2_second` | `second.Map.Gbx` | needs its reward trajectory recorded |
+| 3 | `custom_3_third` | `third.Map.Gbx` | needs its reward trajectory recorded |
+| 4 | `custom_4_fourth` | `fourth.Map.Gbx` | needs its reward trajectory recorded |
+| 5 | `custom_5_fifth` | `fifth.Map.Gbx` | needs its reward trajectory recorded |
+| 6 | `custom_6_sixth` | `sixth.Map.Gbx` | needs its reward trajectory recorded (last stage) |
 
-Only TMRL's two stock maps are configured so far. Per Section 10 ("the exact
-tracks must be determined from the actual available TrackMania maps"), adding
-more/harder stages (e.g. a custom map built in the track editor) means adding
-a `CurriculumStage` entry to `curriculum/stages.py` and recording its reward
+Stages 1-6 are the user's own 6 custom maps (built in TrackMania's track
+editor, `Documents\Trackmania\Maps\My Maps\first.Map.Gbx` .. `sixth.Map.Gbx`),
+in increasing difficulty by design. None have a performance-based promotion
+threshold yet (deliberately -- Section 12: don't pick a threshold number
+speculatively before seeing real achieved-return data on a track nobody has
+trained on). They promote on `min_env_steps` (20,000) alone, or manually:
+
+```bash
+python train_td3.py curriculum-promote          # advance past the current stage
+python train_td3.py curriculum-jump <stage_name> # jump to any stage directly
+```
+
+Adding a 7th+ stage later (Section 10: "the exact tracks must be determined
+from the actual available TrackMania maps") just means adding another
+`CurriculumStage` entry to `curriculum/stages.py` and recording its reward
 trajectory the same way -- no other code changes needed.
 
 ## Generalization testing (Section 19)

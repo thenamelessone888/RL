@@ -348,6 +348,8 @@ def main():
             "curriculum-worker",
             "curriculum-status",
             "curriculum-watch",
+            "curriculum-promote",
+            "curriculum-jump",
             "record-track-reward",
         ],
         help="Process to start",
@@ -358,7 +360,8 @@ def main():
         nargs="?",
         default=None,
         help="(record-track-reward) name of the curriculum stage to record "
-             "a reward trajectory for, e.g. tmrl_train_harder",
+             "a reward trajectory for. (curriculum-jump) name of the stage "
+             "to jump to, e.g. custom_3_third",
     )
 
     parser.add_argument(
@@ -461,10 +464,41 @@ def main():
         if not args.stage_name:
             raise SystemExit(
                 "record-track-reward requires a stage name, e.g.:\n"
-                "  python train_td3.py record-track-reward tmrl_train_harder"
+                "  python train_td3.py record-track-reward custom_1_first"
             )
         from curriculum.reward_registry import record_stage_reward
         record_stage_reward(args.stage_name, force=args.force)
+
+    elif args.mode == "curriculum-promote":
+        from curriculum.manager import CurriculumManager
+        manager = CurriculumManager()
+        if manager.is_last_stage:
+            raise SystemExit(
+                f"Already on the last stage ({manager.current_stage.name}); "
+                "nothing to promote to."
+            )
+        completed = manager.current_stage
+        next_stage = manager.promote()
+        print(f"[CURRICULUM] Manually promoted past {completed.name!r}.")
+        print(f"[CURRICULUM] Now on stage: {next_stage.name} ({next_stage.map_file})")
+        if not next_stage.ready:
+            print(f"[CURRICULUM] Record its reward trajectory before training it:")
+            print(f"    python train_td3.py record-track-reward {next_stage.name}")
+
+    elif args.mode == "curriculum-jump":
+        if not args.stage_name:
+            raise SystemExit(
+                "curriculum-jump requires a stage name, e.g.:\n"
+                "  python train_td3.py curriculum-jump custom_3_third"
+            )
+        from curriculum.manager import CurriculumManager
+        manager = CurriculumManager()
+        manager.jump_to_stage(args.stage_name)
+        print(f"[CURRICULUM] Jumped to stage: {manager.current_stage.name} "
+              f"({manager.current_stage.map_file})")
+        if not manager.current_stage.ready:
+            print(f"[CURRICULUM] Record its reward trajectory before training it:")
+            print(f"    python train_td3.py record-track-reward {manager.current_stage.name}")
 
     elif args.mode == "record":
         run_record(episodes=args.episodes, minutes=args.minutes)

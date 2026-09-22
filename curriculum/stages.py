@@ -52,36 +52,85 @@ class CurriculumStage:
 
 
 # ============================================================================
-# Initial curriculum: the two maps TMRL ships out of the box.
+# Curriculum: stage 0 is TMRL's stock tmrl-test map (already has a recorded
+# reward trajectory -- TmrlData/resources/reward.pkl, the official
+# pretrained-SAC baseline's trajectory -- reused via
+# reward_registry.bootstrap_stage_zero_from_official_baseline()), used as a
+# quick sanity-check warm-up stage.
 #
-# tmrl-test:  already has a recorded reward trajectory
-#             (TmrlData/resources/reward.pkl, the official pretrained-SAC
-#             baseline's trajectory) -- reused here as stage 0's reward via
-#             reward_registry.bootstrap_stage_zero_from_official_baseline().
-# tmrl-train: no reward trajectory exists yet. Record one with:
-#                 python train_td3.py record-track-reward tmrl_train_harder
-#             while tmrl-train.Map.Gbx is loaded in TrackMania.
+# Stages 1-6 are the user's own six custom maps, built specifically for this
+# curriculum in TrackMania's track editor (Documents\Trackmania\Maps\My Maps\
+# first.Map.Gbx .. sixth.Map.Gbx), in increasing difficulty order by design.
+# None of their reward trajectories are recorded yet -- record each one
+# (while that stage's map is loaded in TrackMania) right before you're ready
+# to train it:
+#     python train_td3.py record-track-reward custom_1_first
 #
-# Add more CurriculumStage entries here as more tracks become available
-# (Section 10: "the exact tracks must be determined from the actual
-# available TrackMania maps" -- never invented).
+# promotion_return_threshold is intentionally left unset (None -- fixed-step
+# promotion only) for all six: a performance-based threshold would need to be
+# calibrated against real achieved-return data on that specific track, which
+# does not exist yet for tracks nobody has trained on (Section 12: don't pick
+# a number speculatively). Once you've seen a stage's typical return range in
+# practice, you can add a threshold for it, or promote manually at any time:
+#     python train_td3.py curriculum-promote
+#     python train_td3.py curriculum-jump <stage_name>
 # ============================================================================
 
 STAGES = [
     CurriculumStage(
         name="tmrl_test_baseline",
-        description="tmrl-test: the stock TMRL map already used in Phases 0-6.",
+        description="tmrl-test: the stock TMRL map already used in Phases 0-6. "
+                     "Quick sanity-check warm-up stage before the custom curriculum.",
         map_file="tmrl-test.Map.Gbx",
         min_env_steps=20_000,
         promotion_window=10,
         promotion_return_threshold=40.0,
     ),
     CurriculumStage(
-        name="tmrl_train_harder",
-        description="tmrl-train: TMRL's second stock map, used here as the "
-                     "next curriculum stage. Needs its reward trajectory "
-                     "recorded before this stage can run.",
-        map_file="tmrl-train.Map.Gbx",
+        name="custom_1_first",
+        description="Custom map 'first' -- easiest of the 6-track curriculum.",
+        map_file="first.Map.Gbx",
+        min_env_steps=20_000,
+        promotion_window=10,
+        promotion_return_threshold=None,
+    ),
+    CurriculumStage(
+        name="custom_2_second",
+        description="Custom map 'second'.",
+        map_file="second.Map.Gbx",
+        min_env_steps=20_000,
+        promotion_window=10,
+        promotion_return_threshold=None,
+    ),
+    CurriculumStage(
+        name="custom_3_third",
+        description="Custom map 'third'.",
+        map_file="third.Map.Gbx",
+        min_env_steps=20_000,
+        promotion_window=10,
+        promotion_return_threshold=None,
+    ),
+    CurriculumStage(
+        name="custom_4_fourth",
+        description="Custom map 'fourth'.",
+        map_file="fourth.Map.Gbx",
+        min_env_steps=20_000,
+        promotion_window=10,
+        promotion_return_threshold=None,
+    ),
+    CurriculumStage(
+        name="custom_5_fifth",
+        description="Custom map 'fifth'.",
+        map_file="fifth.Map.Gbx",
+        min_env_steps=20_000,
+        promotion_window=10,
+        promotion_return_threshold=None,
+    ),
+    CurriculumStage(
+        name="custom_6_sixth",
+        description="Custom map 'sixth' -- hardest of the 6-track curriculum "
+                     "(last stage).",
+        map_file="sixth.Map.Gbx",
         min_env_steps=20_000,
         promotion_window=10,
         promotion_return_threshold=None,  # last stage: fixed-step only
