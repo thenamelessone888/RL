@@ -684,3 +684,90 @@ TD3_HUMAN_WARMSTART_TRAINER = partial(
         else "cpu"
     ),
 )
+
+
+# ============================================================================
+# CURRICULUM RUN (curriculum/)
+# ============================================================================
+#
+# One persistent experiment identity carried across EVERY curriculum stage
+# (Section 11: "the curriculum must NOT create a new actor/critic for every
+# track"). Only the active reward file (curriculum/reward_registry.py) and
+# the physically-loaded TrackMania map change between stages; the trainer's
+# own checkpoint (.tcpt) restore is what makes reusing these same paths
+# safe -- Trainer.run() loads the checkpoint (if any) AFTER constructing the
+# TrainingAgent, so warmstart_actor_path below only ever matters on stage 0's
+# very first, checkpoint-less launch. Every later launch (whether resuming
+# stage 0 or continuing into stage 1+) restores the actual trained weights
+# from the checkpoint, not the frozen BC actor.
+
+TD3_CURRICULUM_EXPERIMENT_NAME = "TD3_CURRICULUM"
+TD3_CURRICULUM_EXPERIMENT_FOLDER = (
+    cfg.TMRL_FOLDER / "experiments" / TD3_CURRICULUM_EXPERIMENT_NAME
+)
+TD3_CURRICULUM_EXPERIMENT_FOLDER.mkdir(parents=True, exist_ok=True)
+
+TD3_CURRICULUM_MODEL_PATH_WORKER = str(TD3_CURRICULUM_EXPERIMENT_FOLDER / "worker.tmod")
+TD3_CURRICULUM_MODEL_PATH_SAVE_HISTORY = str(TD3_CURRICULUM_EXPERIMENT_FOLDER / "history_")
+TD3_CURRICULUM_MODEL_PATH_TRAINER = str(TD3_CURRICULUM_EXPERIMENT_FOLDER / "trainer.tmod")
+TD3_CURRICULUM_CHECKPOINT_PATH = str(TD3_CURRICULUM_EXPERIMENT_FOLDER / "trainer.tcpt")
+
+assert TD3_CURRICULUM_MODEL_PATH_WORKER not in {
+    cfg.MODEL_PATH_WORKER,
+    TD3_MODEL_PATH_WORKER,
+    TD3_HUMAN_WARMSTART_MODEL_PATH_WORKER,
+}
+
+TD3_CURRICULUM_DATASET_FOLDER = cfg.TMRL_FOLDER / "dataset_curriculum"
+TD3_CURRICULUM_DATASET_FOLDER.mkdir(parents=True, exist_ok=True)
+TD3_CURRICULUM_DATASET_PATH = str(TD3_CURRICULUM_DATASET_FOLDER)
+
+assert TD3_CURRICULUM_DATASET_PATH not in {cfg.DATASET_PATH, TD3_DATASET_PATH}
+
+TD3_CURRICULUM_MEMORY = partial(
+    MemoryTMLidar,
+    memory_size=TD3_MEMORY_SIZE,
+    batch_size=TD3_BATCH_SIZE,
+    sample_preprocessor=TD3_SAMPLE_PREPROCESSOR,
+    dataset_path=TD3_CURRICULUM_DATASET_PATH,
+    imgs_obs=cfg.IMG_HIST_LEN,
+    act_buf_len=cfg.ACT_BUF_LEN,
+    crc_debug=cfg.CRC_DEBUG,
+)
+
+TD3_CURRICULUM_AGENT = partial(
+    TD3Agent,
+    device="cuda" if cfg.CUDA_TRAINING else "cpu",
+    model_cls=TD3ActorCritic,
+    gamma=0.99,
+    tau=0.005,
+    policy_delay=2,
+    target_policy_noise=0.2,
+    target_noise_clip=0.5,
+    lr_actor=1e-3,
+    lr_critic=1e-3,
+    optimizer_actor="adam",
+    optimizer_critic="adam",
+    l2_critic=None,
+    critic_warmup_steps=1000,
+    # Only applied on a fresh (checkpoint-less) launch -- see module comment.
+    warmstart_actor_path=TD3_HUMAN_WARMSTART_ACTOR_PATH,
+    bc_reg_alpha=2.5,
+)
+
+TD3_CURRICULUM_TRAINER = partial(
+    TorchTrainingOffline,
+    env_cls=TD3_ENV_CLS,
+    memory_cls=TD3_CURRICULUM_MEMORY,
+    training_agent_cls=TD3_CURRICULUM_AGENT,
+    epochs=1000,
+    rounds=10,
+    steps=200,
+    update_model_interval=200,
+    update_buffer_interval=200,
+    max_training_steps_per_env_step=1.0,
+    profiling=False,
+    agent_scheduler=None,
+    start_training=200,
+    device="cuda" if cfg.CUDA_TRAINING else "cpu",
+)

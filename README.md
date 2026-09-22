@@ -27,13 +27,16 @@ td3/                  TD3 agent, actor/twin-critic models, config, diagnostics
 demonstrations/        Shared, algorithm-agnostic human-demonstration recording,
                        inspection, and dataset tooling (used by TD3's behavior-
                        cloning warm-start; not TD3-specific by design)
-tests/                 pytest suite (`pytest tests/ -v`) - 9 tests, all passing
+curriculum/            Stage definitions, per-track reward registry, and promotion
+                       tracking for training the same policy across tracks of
+                       increasing difficulty - see docs/curriculum.md
+tests/                 pytest suite (`pytest tests/ -v`) - 11 tests, all passing
 archive/ddpg_legacy/   The project's original DDPG implementation, superseded by
                        TD3 (see archive/ddpg_legacy/README.md for why)
 configs/, docs/,
 results/, experiments/ Scaffolding for later phases - see each folder's README.md
 train_td3.py           CLI launcher: server / trainer / worker / record /
-                       pretrain-human / inspect-human-data / diagnose / eval modes
+                       pretrain-human / curriculum-* / diagnose / eval modes
 ```
 
 ## Setup
@@ -73,6 +76,20 @@ python train_td3.py diagnose
 python train_td3.py verify-bc
 python train_td3.py bc-eval --episodes 1
 python train_td3.py random-eval --episodes 1
+python train_td3.py trained-eval --episodes 1   # inspect the live trainer checkpoint
+```
+
+Curriculum learning across tracks of increasing difficulty (see
+[docs/curriculum.md](docs/curriculum.md) for the full workflow, including what
+must be done manually — map loading and each new track's reward recording
+cannot be automated):
+
+```bash
+python train_td3.py curriculum-status
+python train_td3.py record-track-reward <stage_name>
+python train_td3.py curriculum-trainer
+python train_td3.py curriculum-worker
+python train_td3.py curriculum-watch --trainer-log <path>
 ```
 
 ## Testing
@@ -81,14 +98,19 @@ python train_td3.py random-eval --episodes 1
 python -m pytest tests/ -v
 ```
 
-All 9 tests are offline (no TrackMania/OpenPlanet required): TD3 agent/model/config/
-checkpoint/demonstration unit tests, plus two shared tests for the human-demonstration
-dataset format and the underlying `MemoryTMLidar` replay format.
+All 11 tests are offline (no TrackMania/OpenPlanet required): TD3 agent/model/config/
+checkpoint/demonstration unit tests, curriculum promotion-logic tests, plus two shared
+tests for the human-demonstration dataset format and the underlying `MemoryTMLidar`
+replay format.
 
 ## Status
 
 See the project owner's working notes for current phase status against the research
 plan's 12-phase development order (Phase 0: inspection through Phase 12: final
-experiments). As of this cleanup pass: TD3 is implemented and unit-tested; human
-behavior-cloning warm-start is implemented and unit-tested; curriculum learning,
-multi-track training, and generalization evaluation are not yet implemented.
+experiments). TD3 is implemented and unit-tested; human behavior-cloning warm-start
+is implemented and unit-tested (with a TD3+BC-style regularization fix — see
+`experiments/phase6_baseline_v1/` and `v2_bc_reg/`); curriculum learning
+infrastructure is implemented and unit-tested (`curriculum/`, `docs/curriculum.md`).
+A known, unfixed gap — no learned wall-stuck recovery behavior — is documented in
+`docs/known_issues.md` and worth addressing before a full curriculum training run.
+Multi-track generalization evaluation is not yet automated.

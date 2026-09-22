@@ -61,6 +61,11 @@ def follow(path):
 
 
 def main():
+    # Force line buffering: stdout defaults to block-buffered when
+    # redirected to a file, which would hide progress prints from anything
+    # tailing this process's own output until it exits.
+    sys.stdout.reconfigure(line_buffering=True)
+
     if len(sys.argv) != 3:
         print(f"Usage: python {sys.argv[0]} <trainer_log_path> <run_name>")
         sys.exit(1)

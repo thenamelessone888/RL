@@ -42,6 +42,12 @@ from td3.config import (
     TD3_HUMAN_WARMSTART_MODEL_PATH_WORKER,
     TD3_HUMAN_WARMSTART_MODEL_PATH_TRAINER,
     TD3_HUMAN_WARMSTART_MODEL_PATH_SAVE_HISTORY,
+
+    TD3_CURRICULUM_TRAINER,
+    TD3_CURRICULUM_CHECKPOINT_PATH,
+    TD3_CURRICULUM_MODEL_PATH_WORKER,
+    TD3_CURRICULUM_MODEL_PATH_TRAINER,
+    TD3_CURRICULUM_MODEL_PATH_SAVE_HISTORY,
 )
 
 from td3.models import TD3MLPActor
@@ -95,13 +101,33 @@ def run_server():
 # TRAINER
 # ============================================================================
 
-def run_trainer(human_warmstart=False):
+def run_trainer(human_warmstart=False, curriculum=False):
     print("=" * 60)
-    print("TD3 TRAINER")
+    print("TD3 TRAINER" + (" (CURRICULUM)" if curriculum else ""))
     print("=" * 60)
 
-    trainer_model = TD3_HUMAN_WARMSTART_MODEL_PATH_TRAINER if human_warmstart else TD3_MODEL_PATH_TRAINER
-    trainer_checkpoint = TD3_HUMAN_WARMSTART_CHECKPOINT_PATH if human_warmstart else TD3_CHECKPOINT_PATH
+    if curriculum:
+        from curriculum.manager import CurriculumManager
+        from curriculum import reward_registry
+        manager = CurriculumManager()
+        print(manager.status_string())
+        print()
+        reward_registry.activate(manager.current_stage.name)
+        training_cls = TD3_CURRICULUM_TRAINER
+        trainer_model = TD3_CURRICULUM_MODEL_PATH_TRAINER
+        trainer_checkpoint = TD3_CURRICULUM_CHECKPOINT_PATH
+        dataset_path = cfg.TMRL_FOLDER / "dataset_curriculum"
+    elif human_warmstart:
+        training_cls = TD3_HUMAN_WARMSTART_TRAINER
+        trainer_model = TD3_HUMAN_WARMSTART_MODEL_PATH_TRAINER
+        trainer_checkpoint = TD3_HUMAN_WARMSTART_CHECKPOINT_PATH
+        dataset_path = cfg.TMRL_FOLDER / "dataset_td3"
+    else:
+        training_cls = TD3_TRAINER
+        trainer_model = TD3_MODEL_PATH_TRAINER
+        trainer_checkpoint = TD3_CHECKPOINT_PATH
+        dataset_path = cfg.TMRL_FOLDER / "dataset_td3"
+
     print("Trainer model:")
     print(f"  {trainer_model}")
 
@@ -109,12 +135,12 @@ def run_trainer(human_warmstart=False):
     print(f"  {trainer_checkpoint}")
 
     print(f"Dataset:")
-    print(f"  {cfg.TMRL_FOLDER / 'dataset_td3'}")
+    print(f"  {dataset_path}")
 
     print()
 
     trainer = Trainer(
-        training_cls=(TD3_HUMAN_WARMSTART_TRAINER if human_warmstart else TD3_TRAINER),
+        training_cls=training_cls,
 
         server_ip=cfg.SERVER_IP_FOR_TRAINER,
         server_port=cfg.PORT,
@@ -135,8 +161,8 @@ def run_trainer(human_warmstart=False):
         # Do NOT omit these because TMRL's defaults point at the
         # currently configured SAC paths.
 
-        model_path=(TD3_HUMAN_WARMSTART_MODEL_PATH_TRAINER if human_warmstart else TD3_MODEL_PATH_TRAINER),
-        checkpoint_path=(TD3_HUMAN_WARMSTART_CHECKPOINT_PATH if human_warmstart else TD3_CHECKPOINT_PATH),
+        model_path=trainer_model,
+        checkpoint_path=trainer_checkpoint,
     )
 
     print("[READY] TD3 Trainer connecting to Server...")
@@ -159,13 +185,27 @@ def run_pretrain_human(epochs, batch_size, learning_rate, force=False):
     )
 
 
-def run_worker(human_warmstart=False):
+def run_worker(human_warmstart=False, curriculum=False):
     print("=" * 60)
-    print("TD3 ROLLOUT WORKER")
+    print("TD3 ROLLOUT WORKER" + (" (CURRICULUM)" if curriculum else ""))
     print("=" * 60)
 
-    worker_model = TD3_HUMAN_WARMSTART_MODEL_PATH_WORKER if human_warmstart else TD3_MODEL_PATH_WORKER
-    worker_history = TD3_HUMAN_WARMSTART_MODEL_PATH_SAVE_HISTORY if human_warmstart else TD3_MODEL_PATH_SAVE_HISTORY
+    if curriculum:
+        from curriculum.manager import CurriculumManager
+        from curriculum import reward_registry
+        manager = CurriculumManager()
+        print(manager.status_string())
+        print()
+        reward_registry.activate(manager.current_stage.name)
+        worker_model = TD3_CURRICULUM_MODEL_PATH_WORKER
+        worker_history = TD3_CURRICULUM_MODEL_PATH_SAVE_HISTORY
+    elif human_warmstart:
+        worker_model = TD3_HUMAN_WARMSTART_MODEL_PATH_WORKER
+        worker_history = TD3_HUMAN_WARMSTART_MODEL_PATH_SAVE_HISTORY
+    else:
+        worker_model = TD3_MODEL_PATH_WORKER
+        worker_history = TD3_MODEL_PATH_SAVE_HISTORY
+
     print("Worker model:")
     print(f"  {worker_model}")
 
@@ -191,7 +231,7 @@ def run_worker(human_warmstart=False):
 
         # CRITICAL:
         # Explicit TD3 model path.
-        model_path=(TD3_HUMAN_WARMSTART_MODEL_PATH_WORKER if human_warmstart else TD3_MODEL_PATH_WORKER),
+        model_path=worker_model,
 
         # Existing LIDAR observation preprocessing (algorithm-agnostic).
         obs_preprocessor=TD3_OBS_PREPROCESSOR,
@@ -304,8 +344,28 @@ def main():
             "bc-eval",
             "random-eval",
             "trained-eval",
+            "curriculum-trainer",
+            "curriculum-worker",
+            "curriculum-status",
+            "curriculum-watch",
+            "record-track-reward",
         ],
         help="Process to start",
+    )
+
+    parser.add_argument(
+        "stage_name",
+        nargs="?",
+        default=None,
+        help="(record-track-reward) name of the curriculum stage to record "
+             "a reward trajectory for, e.g. tmrl_train_harder",
+    )
+
+    parser.add_argument(
+        "--trainer-log",
+        type=str,
+        default=None,
+        help="(curriculum-watch) path to the curriculum-trainer's stdout log file",
     )
 
     parser.add_argument(
@@ -372,6 +432,39 @@ def main():
 
     elif args.mode == "worker":
         run_worker(human_warmstart=args.human_warmstart)
+
+    elif args.mode == "curriculum-trainer":
+        run_trainer(curriculum=True)
+
+    elif args.mode == "curriculum-worker":
+        run_worker(curriculum=True)
+
+    elif args.mode == "curriculum-status":
+        from curriculum.manager import CurriculumManager
+        from curriculum import reward_registry
+        print(CurriculumManager().status_string())
+        print()
+        reward_registry.status()
+
+    elif args.mode == "curriculum-watch":
+        if not args.trainer_log:
+            raise SystemExit(
+                "curriculum-watch requires --trainer-log <path to the "
+                "curriculum-trainer process's stdout log file>"
+            )
+        import sys
+        from curriculum.watch_and_promote import main as watch_main
+        sys.argv = [sys.argv[0], args.trainer_log]
+        watch_main()
+
+    elif args.mode == "record-track-reward":
+        if not args.stage_name:
+            raise SystemExit(
+                "record-track-reward requires a stage name, e.g.:\n"
+                "  python train_td3.py record-track-reward tmrl_train_harder"
+            )
+        from curriculum.reward_registry import record_stage_reward
+        record_stage_reward(args.stage_name, force=args.force)
 
     elif args.mode == "record":
         run_record(episodes=args.episodes, minutes=args.minutes)
