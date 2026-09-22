@@ -758,6 +758,15 @@ TD3_CURRICULUM_AGENT = partial(
     # Only applied on a fresh (checkpoint-less) launch -- see module comment.
     warmstart_actor_path=TD3_HUMAN_WARMSTART_ACTOR_PATH,
     bc_reg_alpha=2.5,
+    # Anchor decay (see td3/agent.py's field comment): by the time this was
+    # added, the curriculum run already had ~39,000+ cumulative critic
+    # updates (stage 0 + custom_1_first + most of custom_2_second), well
+    # past this decay_steps threshold -- so the anchor weight will already
+    # be at its floor (0.1, a 10x weaker pull, not fully disabled) as soon
+    # as training resumes with this config, addressing the stuck-at-wall
+    # cluster that persisted for 16+ rounds on custom_2_second.
+    bc_reg_anchor_min_weight=0.1,
+    bc_reg_anchor_decay_steps=20_000,
 )
 
 TD3_CURRICULUM_TRAINER = partial(

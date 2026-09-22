@@ -62,6 +62,46 @@ class TD3Agent(TrainingAgent):
     # following a still-inaccurate critic's gradient.
     bc_reg_alpha: float = 0.0
 
+    # The MSE anchor term itself (NOT bc_reg_alpha/lmbda, which scales the
+    # Q-maximization side of the loss) is multiplied by a weight that
+    # linearly decays from 1.0 down to bc_reg_anchor_min_weight over
+    # bc_reg_anchor_decay_steps total critic updates, then stays at the
+    # floor. decay_steps=0 disables decay (weight stays 1.0, the original
+    # constant-anchor behavior).
+    #
+    # IMPORTANT (self-correction): a first version of this decayed
+    # bc_reg_alpha itself downward, which is backwards -- bc_reg_alpha
+    # scales lmbda multiplying the Q term, so a SMALLER bc_reg_alpha means a
+    # SMALLER lmbda, which makes the (unscaled) MSE anchor term relatively
+    # *stronger*, not weaker. Decaying bc_reg_alpha down would have made the
+    # anchor's pull increase over training, the opposite of the intended
+    # fix. This weight instead multiplies the anchor term directly, so
+    # decaying it toward 0 unambiguously weakens the pull toward the BC
+    # actor's prediction, leaving bc_reg_alpha/lmbda's Q-scaling untouched.
+    #
+    # Added after curriculum stage custom_2_second (2026-09-19) showed a
+    # single stuck-at-wall failure persisting for 16+ consecutive rounds --
+    # far longer than any prior occurrence. Hypothesis: with the anchor held
+    # at full strength forever, the actor's gradient is permanently pulled
+    # back toward the ORIGINAL frozen BC actor's prediction for that state --
+    # and since the human demonstration never covered "how to escape being
+    # stuck" (a competent driver doesn't get stuck), the BC actor's own
+    # prediction there is presumably also poor, actively fighting the RL
+    # signal that's trying to teach a recovery maneuver. Decaying the
+    # anchor's weight over training keeps the original collapse-prevention
+    # benefit early (when the critic is least trustworthy) while giving the
+    # actor much more freedom later (when the critic has seen far more data)
+    # to learn things the BC actor never demonstrated, like recovering from
+    # a stuck state.
+    bc_reg_anchor_min_weight: float = 1.0
+    bc_reg_anchor_decay_steps: int = 0
+
+    def _effective_anchor_weight(self):
+        if self.bc_reg_anchor_decay_steps <= 0:
+            return 1.0
+        progress = min(1.0, self._total_it / self.bc_reg_anchor_decay_steps)
+        return 1.0 + progress * (self.bc_reg_anchor_min_weight - 1.0)
+
     model_nograd = cached_property(
         lambda self: no_grad(copy_shared(self.model))
     )
@@ -167,6 +207,7 @@ class TD3Agent(TrainingAgent):
         self._last_loss_actor = float("nan")
         self._last_actor_grad_norm = float("nan")
         self._last_bc_reg_term = float("nan")
+        self._last_anchor_weight = float("nan")
 
     def get_actor(self):
         return self.model_nograd.actor
@@ -324,6 +365,7 @@ class TD3Agent(TrainingAgent):
                 critic_grad_norm=critic_grad_norm,
                 actor_grad_norm=self._last_actor_grad_norm,
                 bc_reg_term=self._last_bc_reg_term,
+                bc_reg_anchor_weight=self._last_anchor_weight,
                 policy_updated=0.0,
                 critic_warmup=1.0,
                 total_updates=self._total_it,
@@ -373,12 +415,15 @@ class TD3Agent(TrainingAgent):
 
                 bc_reg_term_t = F.mse_loss(pi, bc_pi)
 
+                anchor_weight = self._effective_anchor_weight()
+
                 loss_actor = (
                     -lmbda * q1_pi.mean()
-                    + bc_reg_term_t
+                    + anchor_weight * bc_reg_term_t
                 )
 
                 bc_reg_term = bc_reg_term_t.detach().item()
+                self._last_anchor_weight = anchor_weight
             else:
                 loss_actor = -q1_pi.mean()
 
@@ -418,6 +463,7 @@ class TD3Agent(TrainingAgent):
             critic_grad_norm=critic_grad_norm,
             actor_grad_norm=self._last_actor_grad_norm,
             bc_reg_term=self._last_bc_reg_term,
+            bc_reg_anchor_weight=self._last_anchor_weight,
             policy_updated=float(delayed_step),
             critic_warmup=0.0,
             total_updates=self._total_it,

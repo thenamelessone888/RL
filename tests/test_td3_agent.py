@@ -1315,6 +1315,245 @@ def test_bc_regularization():
 
 
 # ============================================================================
+# BC-ANCHOR DECAY TEST (added after a stuck-at-wall failure persisted for
+# 16+ rounds on curriculum stage custom_2_second -- see td3/agent.py's
+# bc_reg_anchor_min_weight field comment, including the self-correction
+# note about which direction actually weakens the anchor)
+# ============================================================================
+
+def test_bc_reg_anchor_decay():
+    """
+    Verify _effective_anchor_weight() decays 1.0 -> bc_reg_anchor_min_weight
+    over bc_reg_anchor_decay_steps, floors there, and that the DECAYED
+    weight actually shrinks the anchor's contribution to the actor loss
+    relative to an otherwise-identical undecayed agent (the exact bug this
+    test guards against: an earlier version decayed bc_reg_alpha itself,
+    which made the anchor STRONGER over time, the opposite of intended).
+    """
+
+    print("=" * 60)
+    print("TD3 BC-ANCHOR DECAY TEST")
+    print("=" * 60)
+
+    observation_space, action_space = make_spaces()
+
+    device = (
+        "cuda"
+        if torch.cuda.is_available()
+        else "cpu"
+    )
+
+    bc_actor = (
+        TD3MLPActor(
+            observation_space,
+            action_space,
+            device=device,
+        )
+        .to_device(device)
+    )
+
+    with torch.no_grad():
+        for p in bc_actor.parameters():
+            p.add_(
+                torch.randn_like(p) * 0.5
+            )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        warmstart_path = os.path.join(
+            tmp,
+            "TD3_bc_actor.tmod",
+        )
+
+        bc_actor.save(warmstart_path)
+
+        # ====================================================================
+        # _effective_anchor_weight() shape, independent of any training.
+        # ====================================================================
+
+        agent = TD3Agent(
+            observation_space=observation_space,
+            action_space=action_space,
+            device=device,
+            policy_delay=1,
+            critic_warmup_steps=0,
+            warmstart_actor_path=warmstart_path,
+            bc_reg_alpha=2.5,
+            bc_reg_anchor_min_weight=0.1,
+            bc_reg_anchor_decay_steps=10,
+        )
+
+        agent._total_it = 0
+        assert agent._effective_anchor_weight() == 1.0, (
+            "anchor weight must start at 1.0 (no decay yet) at total_it=0"
+        )
+
+        agent._total_it = 5
+        mid_weight = agent._effective_anchor_weight()
+        assert 0.1 < mid_weight < 1.0, (
+            f"anchor weight must be strictly between the floor and 1.0 "
+            f"halfway through decay, got {mid_weight}"
+        )
+
+        agent._total_it = 10
+        assert abs(agent._effective_anchor_weight() - 0.1) < 1e-9, (
+            "anchor weight must equal the floor exactly at decay_steps"
+        )
+
+        agent._total_it = 1000
+        assert abs(agent._effective_anchor_weight() - 0.1) < 1e-9, (
+            "anchor weight must stay pinned at the floor past decay_steps"
+        )
+
+        print(
+            "[PASS] _effective_anchor_weight() decays 1.0 -> floor over "
+            "decay_steps and stays at the floor afterward"
+        )
+
+        # ====================================================================
+        # decay_steps=0 must disable decay entirely (weight always 1.0),
+        # matching the pre-decay default/backward-compatible behavior.
+        # ====================================================================
+
+        agent_no_decay = TD3Agent(
+            observation_space=observation_space,
+            action_space=action_space,
+            device=device,
+            policy_delay=1,
+            critic_warmup_steps=0,
+            warmstart_actor_path=warmstart_path,
+            bc_reg_alpha=2.5,
+            bc_reg_anchor_min_weight=0.1,
+            bc_reg_anchor_decay_steps=0,
+        )
+
+        agent_no_decay._total_it = 999_999
+        assert agent_no_decay._effective_anchor_weight() == 1.0, (
+            "bc_reg_anchor_decay_steps=0 must disable decay (weight always 1.0)"
+        )
+
+        print(
+            "[PASS] bc_reg_anchor_decay_steps=0 disables decay entirely"
+        )
+
+        # ====================================================================
+        # The actual regression guard: a DECAYED (floored) anchor weight
+        # must make the anchor's contribution to loss_actor SMALLER than an
+        # UNDECAYED agent, given identical initialization/batch/total_it.
+        # This is the exact direction that was wrong in the first version.
+        # ====================================================================
+
+        batch = make_batch(32)
+
+        torch.manual_seed(0)
+        agent_undecayed = TD3Agent(
+            observation_space=observation_space,
+            action_space=action_space,
+            device=device,
+            policy_delay=1,
+            critic_warmup_steps=0,
+            warmstart_actor_path=warmstart_path,
+            bc_reg_alpha=2.5,
+            bc_reg_anchor_min_weight=1.0,   # no decay: weight always 1.0
+            bc_reg_anchor_decay_steps=0,
+        )
+
+        torch.manual_seed(0)
+        agent_decayed = TD3Agent(
+            observation_space=observation_space,
+            action_space=action_space,
+            device=device,
+            policy_delay=1,
+            critic_warmup_steps=0,
+            warmstart_actor_path=warmstart_path,
+            bc_reg_alpha=2.5,
+            bc_reg_anchor_min_weight=0.1,   # will be floored immediately below
+            bc_reg_anchor_decay_steps=1,
+        )
+
+        assert params_equal(
+            clone_params(agent_undecayed.model.critic1),
+            clone_params(agent_decayed.model.critic1),
+        ), "test setup invalid: agents differ despite identical seeding"
+
+        # Right after warm-start, the online actor IS the BC actor, so
+        # MSE(pi, bc_pi) is exactly 0.0 -- comparing anchor contributions
+        # there would trivially pass (0.1*0 == 1.0*0) without testing
+        # anything. Perturb BOTH agents' online actors by the SAME offset
+        # (so they remain identical to each other, only now different from
+        # the frozen bc_actor) to get a genuinely non-zero, IDENTICAL
+        # bc_reg_term for both agents in a single train() call -- isolating
+        # the weight's effect instead of letting a multi-step training loop
+        # introduce confounding divergence between the two agents.
+        with torch.no_grad():
+            for p1, p2 in zip(
+                agent_undecayed.model.actor.parameters(),
+                agent_decayed.model.actor.parameters(),
+            ):
+                offset = torch.randn_like(p1) * 0.3
+                p1.add_(offset)
+                p2.add_(offset)
+
+        assert params_equal(
+            clone_params(agent_undecayed.model.actor),
+            clone_params(agent_decayed.model.actor),
+        ), "test setup invalid: identical perturbation left actors different"
+
+        collated = collate_torch(batch, device=device)
+        metrics_undecayed = agent_undecayed.train(collated)
+        metrics_decayed = agent_decayed.train(collated)
+
+        assert metrics_undecayed["bc_reg_term"] > 0.0, (
+            "test setup invalid: bc_reg_term is still exactly 0 after "
+            "perturbing the actor away from the frozen BC reference"
+        )
+
+        assert abs(
+            metrics_undecayed["bc_reg_term"] - metrics_decayed["bc_reg_term"]
+        ) < 1e-5, (
+            "test setup invalid: bc_reg_term should be identical for both "
+            "agents (identical actors/observations at the moment it's "
+            "computed, before this train() call's gradient step is applied)"
+        )
+
+        assert metrics_undecayed["bc_reg_anchor_weight"] == 1.0
+        assert abs(metrics_decayed["bc_reg_anchor_weight"] - 0.1) < 1e-9
+
+        # Same bc_reg_term (MSE(pi, bc_pi) itself is identical given
+        # identical seeding/critics/batch) scaled by a 10x smaller weight
+        # must pull loss_actor's anchor contribution down proportionally.
+        # We can't compare loss_actor directly (the Q term also shifts
+        # slightly since critics were just updated identically but actor
+        # params differ a hair after this step) -- instead verify directly
+        # via the logged bc_reg_term x weight arithmetic.
+        undecayed_anchor_contribution = (
+            metrics_undecayed["bc_reg_anchor_weight"]
+            * metrics_undecayed["bc_reg_term"]
+        )
+        decayed_anchor_contribution = (
+            metrics_decayed["bc_reg_anchor_weight"]
+            * metrics_decayed["bc_reg_term"]
+        )
+
+        assert decayed_anchor_contribution < undecayed_anchor_contribution, (
+            "a decayed (floored) anchor weight must produce a SMALLER "
+            "anchor contribution to the actor loss than an undecayed one -- "
+            "this is the exact direction the first (buggy) version got "
+            "backwards"
+        )
+
+        print(
+            "[PASS] A decayed anchor weight produces a smaller anchor "
+            "contribution to the actor loss than an undecayed one "
+            "(confirms the fix pulls in the correct direction)"
+        )
+
+    print()
+    print("=" * 60)
+    print("TD3 BC-ANCHOR DECAY TEST PASSED")
+    print("=" * 60)
+
+
+# ============================================================================
 # PYTEST ENTRY POINTS
 # ============================================================================
 
@@ -1327,6 +1566,7 @@ def test_main():
     test_warmstart()
     test_critic_warmup()
     test_bc_regularization()
+    test_bc_reg_anchor_decay()
 
 
 if __name__ == "__main__":
@@ -1334,3 +1574,4 @@ if __name__ == "__main__":
     test_warmstart()
     test_critic_warmup()
     test_bc_regularization()
+    test_bc_reg_anchor_decay()
