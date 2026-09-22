@@ -616,6 +616,27 @@ TD3_HUMAN_WARMSTART_AGENT = partial(
 
     # Load the canonical human behavior-cloned actor.
     warmstart_actor_path=TD3_HUMAN_WARMSTART_ACTOR_PATH,
+
+    # ------------------------------------------------------------------------
+    # BC-ANCHOR REGULARIZATION (TD3+BC style, Fujimoto & Gu 2021)
+    # ------------------------------------------------------------------------
+    #
+    # Phase 6 baseline (experiments/phase6_baseline_v1/manifest.md) found that
+    # critic_warmup_steps alone was NOT sufficient: within ~5 actor updates of
+    # warm-up ending, the actor collapsed from a genuinely good BC policy
+    # (returns 25-77, episodes up to 881/1000 steps) to the same degenerate
+    # 0-return/81-step crash seen with a fully random policy. The critic had
+    # only ~1000-1500 samples by the time warm-up ended -- nowhere near enough
+    # to accurately value the BC policy, so the actor's pure -Q(s,pi(s))
+    # gradient pulled it toward whatever the still-inaccurate critic currently
+    # (wrongly) preferred.
+    #
+    # This term anchors the actor to the frozen BC actor's own predictions
+    # (see td3/agent.py's bc_reg_alpha), so early post-warmup actor updates
+    # are nudged by the RL signal rather than allowed to drift arbitrarily
+    # far from demonstrated behavior. alpha=2.5 matches the TD3+BC paper's
+    # default.
+    bc_reg_alpha=2.5,
 )
 
 

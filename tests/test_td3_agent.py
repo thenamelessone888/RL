@@ -1138,6 +1138,183 @@ def test_critic_warmup():
 
 
 # ============================================================================
+# BC-ANCHOR REGULARIZATION TEST (TD3+BC style, added after Phase 6 baseline
+# found critic_warmup_steps alone insufficient to prevent post-warmup
+# collapse -- see experiments/phase6_baseline_v1/manifest.md)
+# ============================================================================
+
+def test_bc_regularization():
+    """
+    Verify bc_reg_alpha actually changes the actor loss/gradient relative to
+    plain TD3 when a warm-start actor is present, does nothing when
+    bc_reg_alpha=0.0 (the default, backward-compatible with test_warmstart),
+    and never touches the frozen BC reference actor's own parameters.
+    """
+
+    print("=" * 60)
+    print("TD3 BC-ANCHOR REGULARIZATION TEST")
+    print("=" * 60)
+
+    observation_space, action_space = make_spaces()
+
+    device = (
+        "cuda"
+        if torch.cuda.is_available()
+        else "cpu"
+    )
+
+    bc_actor = (
+        TD3MLPActor(
+            observation_space,
+            action_space,
+            device=device,
+        )
+        .to_device(device)
+    )
+
+    with torch.no_grad():
+        for p in bc_actor.parameters():
+            p.add_(
+                torch.randn_like(p) * 0.5
+            )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        warmstart_path = os.path.join(
+            tmp,
+            "TD3_bc_actor.tmod",
+        )
+
+        bc_actor.save(warmstart_path)
+
+        batch = make_batch(32)
+
+        # ====================================================================
+        # Construct BOTH agents (identically seeded) BEFORE training either,
+        # so the "identical initialization" check compares like with like.
+        # ====================================================================
+
+        torch.manual_seed(0)
+
+        agent_off = TD3Agent(
+            observation_space=observation_space,
+            action_space=action_space,
+            device=device,
+            policy_delay=1,
+            critic_warmup_steps=0,
+            warmstart_actor_path=warmstart_path,
+            bc_reg_alpha=0.0,
+        )
+
+        assert agent_off.bc_actor is not None, (
+            "bc_actor should still be constructed whenever "
+            "warmstart_actor_path is set, even if bc_reg_alpha=0.0"
+        )
+
+        torch.manual_seed(0)
+
+        agent_on = TD3Agent(
+            observation_space=observation_space,
+            action_space=action_space,
+            device=device,
+            policy_delay=1,
+            critic_warmup_steps=0,
+            warmstart_actor_path=warmstart_path,
+            bc_reg_alpha=2.5,
+        )
+
+        # Identical seed => identical initialization for both agents.
+        assert params_equal(
+            clone_params(agent_off.model.critic1),
+            clone_params(agent_on.model.critic1),
+        ), (
+            "test setup invalid: agent_off/agent_on critics differ "
+            "despite identical seeding"
+        )
+
+        bc_actor_params_before = clone_params(agent_on.bc_actor)
+
+        # ====================================================================
+        # bc_reg_alpha=0.0 must be a no-op (matches plain TD3 loss).
+        # ====================================================================
+
+        metrics_off = agent_off.train(
+            collate_torch(batch, device=device)
+        )
+
+        assert np.isnan(metrics_off["bc_reg_term"]), (
+            "bc_reg_term must be NaN when bc_reg_alpha=0.0 "
+            "(regularization disabled)"
+        )
+
+        print(
+            "[PASS] bc_reg_alpha=0.0 disables regularization "
+            "(bc_reg_term stays NaN)"
+        )
+
+        # ====================================================================
+        # bc_reg_alpha>0 must engage and change the actor loss.
+        # ====================================================================
+
+        metrics_on = agent_on.train(
+            collate_torch(batch, device=device)
+        )
+
+        assert np.isfinite(metrics_on["bc_reg_term"]), (
+            "bc_reg_term must be a finite number when "
+            "bc_reg_alpha>0 and a warm-start actor is present"
+        )
+
+        assert metrics_on["bc_reg_term"] >= 0.0, (
+            "bc_reg_term is a mean-squared error and must be "
+            "non-negative"
+        )
+
+        print(
+            "[PASS] bc_reg_alpha>0 reports a finite, "
+            "non-negative bc_reg_term"
+        )
+
+        assert metrics_on["loss_actor"] != metrics_off["loss_actor"], (
+            "bc_reg_alpha>0 must change the actor loss relative to "
+            "bc_reg_alpha=0.0 given identical initialization/batch"
+        )
+
+        print(
+            "[PASS] bc_reg_alpha>0 actually changes the actor loss "
+            "relative to plain TD3 (bc_reg_alpha=0.0)"
+        )
+
+        # ====================================================================
+        # The frozen BC reference actor must never be optimized.
+        # ====================================================================
+
+        assert params_equal(
+            bc_actor_params_before,
+            clone_params(agent_on.bc_actor),
+        ), (
+            "agent.bc_actor's parameters changed during training -- "
+            "the frozen BC reference must never receive gradient updates"
+        )
+
+        assert all(
+            not p.requires_grad
+            for p in agent_on.bc_actor.parameters()
+        ), (
+            "agent.bc_actor parameters must have requires_grad=False"
+        )
+
+        print(
+            "[PASS] Frozen BC reference actor is never modified "
+            "by training and carries no gradients"
+        )
+
+    print()
+    print("=" * 60)
+    print("TD3 BC-ANCHOR REGULARIZATION TEST PASSED")
+    print("=" * 60)
+
+
+# ============================================================================
 # PYTEST ENTRY POINTS
 # ============================================================================
 
@@ -1149,9 +1326,11 @@ def test_main():
     main()
     test_warmstart()
     test_critic_warmup()
+    test_bc_regularization()
 
 
 if __name__ == "__main__":
     main()
     test_warmstart()
     test_critic_warmup()
+    test_bc_regularization()

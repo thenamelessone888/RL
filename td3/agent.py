@@ -2,6 +2,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 
 import torch
+import torch.nn.functional as F
 from torch.optim import Adam, AdamW, SGD
 
 from tmrl.training import TrainingAgent
@@ -49,6 +50,18 @@ class TD3Agent(TrainingAgent):
     # Optional behavior-cloning actor initialization.
     warmstart_actor_path: str = None
 
+    # BC-anchor regularization coefficient (TD3+BC style, Fujimoto & Gu 2021).
+    # Only active when warmstart_actor_path is set. 0.0 disables it entirely,
+    # reproducing plain TD3's unregularized actor loss (the default, so a
+    # non-warm-started agent is unaffected).
+    #
+    # See the "candidate fixes" note in this module's train() docstring for
+    # why this exists: critic_warmup_steps alone was found (Phase 6, TD3
+    # research plan) to be insufficient to prevent the actor from
+    # immediately collapsing away from a good BC policy once it starts
+    # following a still-inaccurate critic's gradient.
+    bc_reg_alpha: float = 0.0
+
     model_nograd = cached_property(
         lambda self: no_grad(copy_shared(self.model))
     )
@@ -73,6 +86,8 @@ class TD3Agent(TrainingAgent):
         # ---------------------------------------------------------
         # Optional human BC warm-start
         # ---------------------------------------------------------
+        self.bc_actor = None
+
         if self.warmstart_actor_path:
             import os
 
@@ -90,6 +105,13 @@ class TD3Agent(TrainingAgent):
             self.model.actor.load_state_dict(
                 warm_actor.state_dict()
             )
+
+            # Frozen reference copy of the BC actor, held for the lifetime
+            # of training. Never optimized. Used only to anchor the online
+            # actor via bc_reg_alpha (see train()) so that once critic
+            # warm-up ends, the actor is not free to drift arbitrarily far
+            # from demonstrated behavior based on a still-inaccurate critic.
+            self.bc_actor = no_grad(deepcopy(self.model.actor))
 
         # ---------------------------------------------------------
         # Target networks start from the initialized main networks.
@@ -144,6 +166,7 @@ class TD3Agent(TrainingAgent):
         self._total_it = 0
         self._last_loss_actor = float("nan")
         self._last_actor_grad_norm = float("nan")
+        self._last_bc_reg_term = float("nan")
 
     def get_actor(self):
         return self.model_nograd.actor
@@ -300,6 +323,7 @@ class TD3Agent(TrainingAgent):
                 target_q_mean=q_targ.detach().mean().item(),
                 critic_grad_norm=critic_grad_norm,
                 actor_grad_norm=self._last_actor_grad_norm,
+                bc_reg_term=self._last_bc_reg_term,
                 policy_updated=0.0,
                 critic_warmup=1.0,
                 total_updates=self._total_it,
@@ -324,7 +348,41 @@ class TD3Agent(TrainingAgent):
                 pi,
             )
 
-            loss_actor = -q1_pi.mean()
+            bc_reg_term = float("nan")
+
+            if self.bc_actor is not None and self.bc_reg_alpha > 0:
+                # TD3+BC-style anchor (Fujimoto & Gu, 2021), adapted for
+                # online fine-tuning from a warm-start actor rather than a
+                # fixed offline dataset: the online replay buffer's states
+                # are not paired with a recorded human action, so the BC
+                # actor's OWN prediction on the current batch's states is
+                # used as the regression target instead of a literal
+                # dataset action.
+                #
+                # lmbda normalizes the Q-term's scale against the
+                # regression term's scale (mirrors the paper's
+                # alpha / mean(|Q|) normalization), so this remains
+                # well-behaved as Q-values grow during training instead of
+                # requiring per-run manual tuning of a fixed weight.
+                with torch.no_grad():
+                    bc_pi = self.bc_actor(o)
+
+                lmbda = self.bc_reg_alpha / (
+                    q1_pi.detach().abs().mean().clamp(min=1e-6)
+                )
+
+                bc_reg_term_t = F.mse_loss(pi, bc_pi)
+
+                loss_actor = (
+                    -lmbda * q1_pi.mean()
+                    + bc_reg_term_t
+                )
+
+                bc_reg_term = bc_reg_term_t.detach().item()
+            else:
+                loss_actor = -q1_pi.mean()
+
+            self._last_bc_reg_term = bc_reg_term
 
             self.actor_optimizer.zero_grad(
                 set_to_none=True
@@ -359,6 +417,7 @@ class TD3Agent(TrainingAgent):
             target_q_mean=q_targ.detach().mean().item(),
             critic_grad_norm=critic_grad_norm,
             actor_grad_norm=self._last_actor_grad_norm,
+            bc_reg_term=self._last_bc_reg_term,
             policy_updated=float(delayed_step),
             critic_warmup=0.0,
             total_updates=self._total_it,
