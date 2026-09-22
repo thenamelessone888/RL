@@ -303,6 +303,7 @@ def main():
             "verify-bc",
             "bc-eval",
             "random-eval",
+            "trained-eval",
         ],
         help="Process to start",
     )
@@ -393,12 +394,18 @@ def main():
         from td3.live_diagnostics import verify_artifacts
         verify_artifacts()
 
-    elif args.mode in {"bc-eval", "random-eval"}:
+    elif args.mode in {"bc-eval", "random-eval", "trained-eval"}:
         from td3.live_diagnostics import run_deterministic_policy
+        policy = {
+            "bc-eval": "bc",
+            "random-eval": "random",
+            "trained-eval": "trained",
+        }[args.mode]
         run_deterministic_policy(
-            policy="bc" if args.mode == "bc-eval" else "random",
+            policy=policy,
             episodes=args.episodes or 1,
             max_steps=args.max_steps,
+            trace_steps=args.max_steps * (args.episodes or 1),
         )
 
 

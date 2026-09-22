@@ -104,13 +104,28 @@ def verify_artifacts(device=None):
 
 
 def run_deterministic_policy(policy, episodes=1, max_steps=200, trace_steps=100):
-    """Run BC or random policy directly against TrackMania without RL machinery."""
-    if policy not in {"bc", "random"}:
-        raise ValueError("policy must be 'bc' or 'random'")
+    """Run BC, random, or the current trained policy directly against TrackMania
+    without RL machinery. 'trained' loads the trainer's live worker.tmod
+    (TD3_HUMAN_WARMSTART_MODEL_PATH_WORKER), i.e. whatever the most recent
+    training run last broadcast -- used to inspect the actor's *current*
+    behavior (e.g. comparing a short/failed episode against a long/successful
+    one), as opposed to 'bc' which is always the original frozen BC actor.
+    """
+    if policy not in {"bc", "random", "trained"}:
+        raise ValueError("policy must be 'bc', 'random', or 'trained'")
 
     if policy == "bc":
         model_path = TD3_HUMAN_WARMSTART_ACTOR_PATH
         folder = Path(TD3_CLEAN_HUMAN_EXPERIMENT_FOLDER)
+    elif policy == "trained":
+        from td3.config import TD3_HUMAN_WARMSTART_MODEL_PATH_WORKER
+        model_path = TD3_HUMAN_WARMSTART_MODEL_PATH_WORKER
+        folder = Path(TD3_CLEAN_HUMAN_EXPERIMENT_FOLDER)
+        if not Path(model_path).exists():
+            raise FileNotFoundError(
+                f"No trained worker checkpoint found: {model_path}. "
+                "Run the trainer/worker (--human-warmstart) first."
+            )
     else:
         folder = Path(TD3_CLEAN_RANDOM_EXPERIMENT_FOLDER)
         model_path = str(folder / "DIAGNOSTIC_RANDOM_UNTRAINED_DO_NOT_CREATE.tmod")
