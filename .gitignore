@@ -1,0 +1,24 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.tmp/
+
+# Local virtual environments, if ever created inside the project tree
+.venv/
+venv/
+
+# Editor/OS cruft
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Runtime data belongs in C:\Users\sreci\TmrlData, never in this repo
+*.tmod
+*.tcpt
+*.pkl
+
+# Generated results (kept locally, not committed wholesale; curate what's worth versioning)
+results/metrics/*.csv
+results/metrics/*.json
+results/plots/*.png

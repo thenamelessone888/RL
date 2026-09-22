@@ -1,0 +1,33 @@
+# Pinned to what is actually installed in C:\Users\sreci\RL\tmrl-env (2026-09-19),
+# the environment this project's TD3 implementation was verified against.
+#
+# torch is a CUDA build (cu126) tied to this machine's GPU/driver; on another machine,
+# install torch per https://pytorch.org/get-started/locally/ for the matching CUDA
+# version FIRST, then install the rest of this file.
+
+tmrl==0.7.1
+torch==2.14.0+cu126
+numpy==2.5.2
+gymnasium==1.3.0
+rtgym==0.16
+tlspyo==0.3.0
+opencv-python==5.0.0.93
+pandas==3.0.5
+PyAutoGUI==0.9.54
+pywin32==312
+PyYAML==6.0.3
+requests==2.34.2
+vgamepad==0.1.0
+wandb==0.30.0
+packaging==26.3
+
+# Optional: only required for `python train_td3.py record` (human demonstration
+# recording via keyboard, see demonstrations/human_input.py).
+keyboard==0.13.5
+
+# Testing
+pytest==9.1.1
+
+# Not yet used by any script in this project (added when results/plots/ is populated,
+# see Section 23 of the research plan / docs/experiments.md).
+# matplotlib
